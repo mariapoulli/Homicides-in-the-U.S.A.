@@ -1,0 +1,860 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+---
+title: "Homicides in the U.S.A."
+output: html_document
+---
+
+```{r setup, include = FALSE}
+
+# knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(modelr)
+library(ggplot2)
+library(rpart)
+library(randomForest)
+library(ISLR)
+library(ModelMetrics)
+library(gridExtra)
+library(quantreg)
+
+```
+
+# Introduction
+
+This project looks at homicides committed in the United States from 1980 onwards. The analysis is centered around different age-groups and looks at certain sub-populations. It also looks at the evolution of crime levels over time. The random forest model tries to predict the race of perpetrators. The linear model tries to predict the age of the perpetrator based on victim age. The data was downloaded from Kaggle.
+
+# About the Dataset
+
+The dataset includes 638k rows and 24 columns. It contains extensive information about homicides such as location, type of crime, murder weapon, relationship between perpetrator and victim as well as age and race information for both victim and perpetrator. The columns which the analysis focuses on are qualitative in nature with the exception of Age.
+
+The dataframe was reduced to 420k rows and 16 columns by removing missing data in certain cells and by removing columns that contained information that was not pertinent to the analysis. The columns Agency_Code, Agency_Name and Agency_Type were dropped as they provided no information for the projections of interest. The rows were reduced because of missing or incomplete data.
+
+```{r, include = FALSE}
+
+## Import database
+
+database <- read_csv("database.csv")
+
+
+## Check columns available
+colnames(database)
+
+## Only select relevant columns
+homicides_columns <- database %>%
+  select(State,
+         Year,
+         Month,
+         Crime_Type,
+         Crime_Solved,
+         Victim_Sex,
+         Victim_Age,
+         Victim_Race,
+         Perpetrator_Sex,
+         Perpetrator_Age,
+         Perpetrator_Race,
+         Relationship,
+         Weapon
+         )
+
+```
+
+```{r clean_age, include = FALSE}
+
+## Clean victim and perpetrator ages
+homicides_clean <- homicides_columns %>%
+  filter(Victim_Age != 998,
+         !is.na(Perpetrator_Age),
+         Perpetrator_Age > 4,
+         Crime_Type != 'Manslaughter_by_Negligence') %>%
+  arrange(Perpetrator_Age)
+
+```
+
+```{r clean_relationship, include = FALSE}
+
+## Check values in Relationship
+unique(database$Relationship)
+
+## Clean Relationship column
+## Change "Boyfriend" to "Boyfriend/Girlfriend"
+homicides_clean$Relationship[homicides_clean$Relationship == "Boyfriend"] <- "Boyfriend/Girlfriend"
+
+## Change "Girlfriend" to "Boyfriend/Girlfriend"
+homicides_clean$Relationship[homicides_clean$Relationship == "Girlfriend"] <- "Boyfriend/Girlfriend"
+
+## Change "Employee" to "Colleague"
+homicides_clean$Relationship[homicides_clean$Relationship == "Employee"] <- "Colleague"
+
+## Change "Employer" to "Colleague"
+homicides_clean$Relationship[homicides_clean$Relationship == "Employer"] <- "Colleague"
+
+## Change "Common-Law_Husband" to "Husband"
+homicides_clean$Relationship[homicides_clean$Relationship == "Common-Law_Husband"] <- "Husband"
+
+## Change "Common-Law_Wife" to "Wife"
+homicides_clean$Relationship[homicides_clean$Relationship == "Common-Law_Wife"] <- "Wife"
+
+unique(homicides_clean$Relationship)
+
+```
+
+```{r clean_weapon, include = FALSE}
+
+## Check values in Weapon
+unique(database$Weapon)
+
+## Clean Weapon column
+## Change "Gun" to "Firearm"
+homicides_clean$Weapon[homicides_clean$Weapon == "Gun"] <- "Firearm"
+
+## Change "Handgun" to "Firearm"
+homicides_clean$Weapon[homicides_clean$Weapon == "Handgun"] <- "Firearm"
+
+## Change "Rifle" to "Firearm"
+homicides_clean$Weapon[homicides_clean$Weapon == "Rifle"] <- "Firearm"
+
+## Change "Shotgun" to "Firearm"
+homicides_clean$Weapon[homicides_clean$Weapon == "Shotgun"] <- "Firearm"
+
+## Change "Suffocation" to "Suffocation/Strangulation"
+homicides_clean$Weapon[homicides_clean$Weapon == "Suffocation"] <- "Suffocation/Strangulation"
+
+## Change "Strangulation" to "Suffocation/Strangulation"
+homicides_clean$Weapon[homicides_clean$Weapon == "Strangulation"] <- "Suffocation/Strangulation"
+
+unique(homicides_clean$Weapon)
+
+```
+
+```{r clean_age_season, include = FALSE}
+
+## Specify age groups for victims
+categorize_victim_age <- function(x) {
+  if(x <= 9) {
+    return("9 and under")
+  }
+  else if (x <= 19){
+    return("10-19")
+  }
+  else if (x <= 29) {
+    return("20-29")
+  }
+  else if (x <= 39) {
+    return("30-39")
+  }
+  else if (x <= 49) {
+    return("40-49")
+  }
+  else if (x <= 59) {
+    return("50-59")
+  }
+  else if (x <= 69) {
+    return("60-69")
+  }
+  else if (x <= 79) {
+    return("70-79")
+  }
+  else if (x <= 89) {
+    return("80-89")
+  }
+  else if( x >= 90) {
+    return("90 and over")
+  }
+}
+homicides_clean$Victim_Age_Group=sapply(homicides_clean$Victim_Age, categorize_victim_age)
+
+## Specify age groups for Perpetrator
+categorize_perpetrator_age <- function(x) {
+  if(x <= 9) {
+    return("9 and under")
+  }
+  else if (x <= 19){
+    return("10-19")
+  }
+  else if (x <= 29) {
+    return("20-29")
+  }
+  else if (x <= 39) {
+    return("30-39")
+  }
+  else if (x <= 49) {
+    return("40-49")
+  }
+  else if (x <= 59) {
+    return("50-59")
+  }
+  else if (x <= 69) {
+    return("60-69")
+  }
+  else if (x <= 79) {
+    return("70-79")
+  }
+  else if (x <= 89) {
+    return("80-89")
+  }
+  else if( x >= 90) {
+    return("90 and over")
+  }
+}
+homicides_clean$Perpetrator_Age_Group=sapply(homicides_clean$Victim_Age, categorize_perpetrator_age)
+
+## Categorise seasons
+categorize_seasons <- function(x) {
+  if(x=='December' | x=='January' | x=='February' ) {
+    return("Winter")
+  }
+  else if (x=='March' | x=='April' | x=='May'){
+    return("Spring")
+  }
+  else if (x=='June' | x=='July' | x=='August') {
+    return("Summer")
+  }
+  else {
+    return("Fall")
+  }
+}
+homicides_clean$Season=sapply(homicides_clean$Month, categorize_seasons)
+
+View(homicides_clean)
+
+```
+# Steps Take to Clean Data
+
+Before proceeding with any analysis the Victim_Age, Perpetrator_Age, and Crime_Type columns were cleand. This was done by using the filter() function to retain all the rows within those columns that met the necessary requirements. Thus, Victim ages equal to 998, Perpetrator ages that were blank or less than 4, and Crime type equal to Manslaughter by Negligence were filtered out.
+
+Within the Relationship column, "Boyfriend" and "Girlfriend" were reclassified to "Boyfriend/Girlfriend", "Employee" and "Employer" to "Colleague", "Common-Law_Husband" to "Husband", and  "Common-Law_Wife" to "Wife". This was done by using the $ command to select the Relationship column within the dataset. Then, subsetting was applied by bracket notation to select the categories to change within Relationship. From there, the new categories were applied to the selected categories by vectorization.
+
+Next, the Weapon column was cleaned with the same procedure that was applied to the Relationship column. This allowed to reclassify "Gun", "Handgun", "Rifle", and "Shotgun" to "Firearm", and "Suffocation" and "Strangulation" to "Suffocation/Strangulation".
+
+Lastly, new columns of Perpetrator_Age_Group, Victim_Age_Group, and Seasons were created. To create a new column, first a categorize function which includes a single multipath if statement was defined. The if statement makes a logical comparison between the values from the selected column and what is expected by testing for a condition. It only returns a character string when the condition is True. Then, the sapply function was used with the selected column from the dataset and the categorize function as the arguments. The output from sapply was assigned to the new column, which was created by using the $ command on the dataset with the name of the new column. This procedure was used to create the other two new columns.
+
+# Time series of murders
+
+Here are the first 5 years of homicides.
+
+```{r exploratory_time_series_murders, include = FALSE}
+time_series <- homicides_clean %>% 
+  group_by(Year) %>%
+  summarise(Murders_each_year = n()) %>%
+  head(5)
+time_series2 <- homicides_clean %>% 
+  group_by(Year) %>%
+  summarise(Murders_each_year = n())
+```
+
+```{r explanatory_time_series, echo = FALSE}
+## Table - Time_Series
+knitr::kable(
+  time_series, 
+  caption = "Evolution of murders over time",
+  )
+
+ggplot(data = time_series2) + geom_line(aes(x = Year,y = Murders_each_year))
+
+```
+
+## Overview of timeseries
+
+As seen, there is a very sharp drop of murders committed starting in the early 1990's. The worst was at the beginning of the 80's and early 90's
+
+**Incidents by State**
+
+This graph showcases total incidents by state. As expected, the state with the highest population has the most murders. Further into the analysis, data from California was used as it provided a solid foundation for the linear model.
+
+
+```{r explanatory_incident_by_state, echo = FALSE}
+ordered_state <- homicides_clean%>%
+  group_by(State)%>%
+  summarise(Total_murders = n(), .groups = 'drop')%>%
+  arrange(desc(Total_murders))%>%
+  ggplot() + geom_col(aes(x = reorder(State, - Total_murders), y = Total_murders))+
+  labs(x= 'State', y = 'Incidents', title = 'Incidents by State')
+ordered_state + theme(axis.text.x = element_text(angle = 90))
+```
+
+# Analysis of Victim vs Perp Sex
+
+**Males vs Females**
+
+The analysis shows that Females are much more likely to be victims of murders. They are also less likely to be perpetrators.
+```{r exploratory_victim_perp_sex, include = FALSE}
+ vic_sex_proportion <- homicides_clean %>%
+  select(Victim_Sex, Perpetrator_Sex) %>%
+  group_by(Victim_Sex) %>%
+  summarise(n_victime_sex = n()) %>%
+  mutate(cum_total_victim = cumsum(n_victime_sex), pct = n_victime_sex/sum(n_victime_sex))
+
+perp_sex_proportion<-homicides_clean %>%
+  select(Victim_Sex, Perpetrator_Sex)%>%
+  group_by(Perpetrator_Sex) %>%
+  summarise(n_perp_sex = n()) %>%
+  mutate(cum_total_perp = cumsum(n_perp_sex), pct = n_perp_sex/sum(n_perp_sex))
+
+
+```
+
+```{r overlay_perp_vic_sex, echo = FALSE}
+
+ggplot(data = vic_sex_proportion, aes(Sex, proportion)) + geom_bar(aes(Victim_Sex,pct, color = 'vic_sex_proportion'), stat = 'identity', fill = 'grey', alpha = 0.5) +
+    geom_bar(data = perp_sex_proportion, aes(Perpetrator_Sex, pct, color = 'perp_sex_proportion'), stat = 'identity',
+             fill = "grey", alpha = 0.4)
+
+
+```
+
+# Analysis of Perpetrators by Age Groups
+
+## Adults (18+) vs. Underage (under 18)
+
+```{r exploratory_adults_vs_underage, include = FALSE}
+
+## Total homicides
+homicides_clean %>%
+  summarize(n = n())
+## 413155
+
+## Adults
+homicides_clean %>%
+  filter(Perpetrator_Age >= 18) %>%
+  summarize(Adults = n())
+## 381302
+
+## Underage
+homicides_clean %>%
+  filter(Perpetrator_Age < 18) %>%
+  summarize(Underage = n())
+## 31853
+
+## Create tibble
+perp_age_tibble <- tibble(
+  Adults = 381302,
+  Underage = 31853
+)
+perp_age_tibble
+
+## Tidy data
+perp_age_tidy <- perp_age_tibble %>%
+  pivot_longer(c(`Adults`, `Underage`), names_to = "Perp_Age_Group", values_to = "N_homicides")
+perp_age_tidy
+
+## Add percentages
+perp_age_percent <- perp_age_tidy %>%
+  mutate(Percent_homicides = N_homicides / sum(N_homicides))
+perp_age_percent
+
+```
+
+```{r exploratory_adults_vs_underage_show, echo = FALSE}
+
+## Table
+knitr::kable(
+  perp_age_percent, 
+  caption = "Adults vs. Underage",
+  )
+
+```
+
+**Observations of Homicides Committed by Adults vs. Underage**
+
+1. Adults perpetrators committed a total of 381302 homicides, which is about 92%.
+2. Underage perpetrators committed a total of 31853 homicides, which is about 8%.
+
+## Breakdown of Age Groups
+
+```{r exploratory_breakdown_age_groups, include = FALSE}
+
+## Breakdown by age groups
+breakdown_age_groups <- homicides_clean %>%
+  group_by(Perpetrator_Age_Group) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count)) %>%
+  mutate(Proportion = Count/sum(Count))
+
+```
+
+```{r exploratory_breakdown_age_groups_show, echo = FALSE}
+
+## Table
+knitr::kable(
+  breakdown_age_groups, 
+  caption = "Breakdown by Perpetrator Age Group",
+  )
+
+```
+
+**Frequency of Homicides Committed within Age Groups**
+
+1. The most frequent age group for perpetrators is 20-29, followed by 30-39 and then 10-19.
+2. The least frequent age group for perpetrators is 9 and under followed by 90 and over.
+3. From the age 40 to 90 the older you are, the least likely you are to commit crime.
+4. 264 perpetrators belong in the "90 and over" Perpetrator_Age_Group. It has the second least total perpetrators within all groups. 
+5. 69972 belong to the group "10-19". It is the 3rd biggest age group in terms of perpetrators. Proportion is 17%.
+
+## Elderly (90+) Perpetrators - Weapons of Choice
+
+```{r exploratory_elderly_weapon, include = FALSE}
+
+## Weapons
+favorite_Weapon90Group <- homicides_clean %>%
+  group_by(Perpetrator_Age_Group) %>%
+  count(Weapon) %>%
+  rename(Num_Weapons = n) %>%
+  filter(Perpetrator_Age_Group == "90 and over") %>%
+  mutate(Proportion = Num_Weapons / sum(Num_Weapons)) %>%
+  arrange(desc(Num_Weapons))
+
+## Weapons by sex
+homicides_Perp_Race_Sex_Weapon <- homicides_clean %>%
+  group_by(Perpetrator_Age_Group, Perpetrator_Race, Perpetrator_Sex, Victim_Age_Group, Weapon) %>%
+  filter(Perpetrator_Age_Group == "90 and over") %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+## Weapons by sex overall
+homicides_total_weapon_gender <-  homicides_clean %>%
+  select(Weapon, Perpetrator_Sex) %>%
+  group_by(Perpetrator_Sex, Weapon) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+```
+
+```{r exploratory_elderly_weapon_show, fig.show = "hold", out.width = "50%", echo = FALSE}
+
+## Table - Weapons
+knitr::kable(
+  favorite_Weapon90Group, 
+  caption = "Weapons of Choice by Elderly Perpetrators",
+  )
+## Table - Weapons overall
+
+
+## Plot and comparison with overall dataset
+ggplot(data = homicides_Perp_Race_Sex_Weapon) + 
+  geom_col(mapping = aes(x = count, y = Weapon, fill = Perpetrator_Sex), position = "dodge") +
+  labs(x = "Number of Crimes Committed", y = "Weapon Used", title = "90 and Over Perp. Group Favorite Weapons by Sex", fill = "Perpetrator Sex")
+
+ggplot(data = homicides_total_weapon_gender) + geom_col(aes(count,Weapon, fill = Perpetrator_Sex), position = "dodge") +
+  labs( x = 'Number of crimes committed', y = 'Weapon used', title = 'Weapon used by sex for all the dataset')
+
+
+```
+
+**Observations of Weapons of Choice**
+
+1. The most common weapon used was a firearm followed by a blunt object. 179 people used Firearms followed by 33 people using a blunt object.
+2. Males favored firearms while females favored blunt objects.
+
+## Elderly (90+) Perpetrators - Victims Age
+
+```{r exploratory_elderly_victim_age, include = FALSE}
+
+## Victims age
+victim_of_elderly <- homicides_clean %>%
+  group_by(Perpetrator_Age_Group) %>%
+  count(Victim_Age_Group) %>%
+  rename(Num_VGroup = n) %>%
+  filter(Perpetrator_Age_Group == "90 and over") %>%
+  arrange(desc(Num_VGroup))
+
+```
+
+```{r exploratory_elderly_victim_age_show, echo = FALSE}
+
+## Table - Victims age
+knitr::kable(
+  victim_of_elderly, 
+  caption = "Victims Age of Elderly Perpetrators",
+  )
+
+```
+
+**Observations of Victims Age**
+
+1. The most targeted Victim_Age_Group was "80-89" with 76 victims within that group.
+2. It was followed by "20-29" with 46 victims.
+
+## Elderly (90+) Perpetrators - Perpetrators Sex
+
+```{r exploratory_elderly_perp_sex, include = FALSE}
+
+## Perpetrators sex
+homicides_Perp_Sex <- homicides_clean %>%
+  group_by(Perpetrator_Age_Group, Perpetrator_Sex, Victim_Age_Group, Weapon) %>%
+  filter(Perpetrator_Age_Group == "90 and over") %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count))%>%
+  head(7)
+
+```
+
+```{r exploratory_elderly_perp_sex_show, echo = FALSE}
+
+## Table - Perpetrators sex
+knitr::kable(
+  homicides_Perp_Sex, 
+  caption = "Sex of Elderly Perpetrators",
+  )
+
+```
+
+**Observations of Perpetrators Sex**
+
+1. Males killed more people between the ages of "80 - 89" using a firearm (56).
+2. Females killed the most people between the ages of "90 and over" using a blunt object(2).
+3. Females did not kill anyone in the Victim_Age_Group of "9 and under" as well.
+4. Males killed at least 1 person in all Victim_Age_Group categories.
+
+## Pre-Teen / Teen Perpetrators (10-19) - Teen Adults
+
+```{r exploratory_teen_adults, include = FALSE}
+
+teen_adults <- homicides_clean %>%
+  filter(Perpetrator_Age==18 | Perpetrator_Age == 19) %>%
+  count(Perpetrator_Age)
+
+## Percentage
+38257/69972
+
+```
+
+```{r exploratory_teen_adults_show, echo = FALSE}
+
+## Table - Teen adults
+knitr::kable(
+  teen_adults, 
+  caption = "Teens Adults",
+  )
+
+```
+
+**Observations of Teens Adults**
+
+Out of 69972, 38,257 are of age 18 or 19, i.e adults. Therefore 55% of the perpetrators in the group 10-19 are adults. 
+
+## Pre-Teen / Teen Perpetrators (10-19) - Weapons of Choice
+
+```{r exploratory_teen_weapon, include = FALSE}
+
+## Weapons
+favorite_Weapon10Group <- homicides_clean %>%
+  group_by(Perpetrator_Age_Group) %>%
+  count(Weapon) %>%
+  rename(Num_Weapons = n) %>%
+  filter(Perpetrator_Age_Group == "10-19") %>%
+  mutate(Proportion = Num_Weapons / sum(Num_Weapons)) %>%
+  arrange(desc(Num_Weapons)) %>%
+  head(7)
+
+```
+
+```{r exploratory_teen_weapon _show, echo = FALSE}
+
+## Table - Weapons
+knitr::kable(
+  favorite_Weapon10Group, 
+  caption = "Weapons of Choice by Pre-Teen / Teen Perpetrators",
+  )
+
+```
+
+**Observations of Weapons of Choice**
+
+Most common weapon used was a firearm followed by a knife.  48661 used firearm, 10333 knife.
+
+
+## Pre-Teen / Teen Perpetrators (10-19) - Victims Age
+
+```{r exploratory_teen_victim_age, include = FALSE}
+
+## Victims age
+victim_of_teen <- homicides_clean %>%
+  group_by(Perpetrator_Age_Group) %>%
+  count(Victim_Age_Group) %>%
+  rename(Num_VGroup = n) %>%
+  filter(Perpetrator_Age_Group == "10-19") %>%
+  arrange(desc(Num_VGroup))
+
+```
+
+```{r exploratory_teen_victim_age_show, echo = FALSE}
+
+## Table - Victims age
+knitr::kable(
+  victim_of_teen, 
+  caption = "Victims Age of Pre-Teen / Teen Perpetrators",
+  )
+
+```
+
+**Observations of Victims Age**
+
+1. The most targeted Victim_Age_Group was 20-29.
+2. It was followed by 10-19.
+
+## Pre-Teen / Teen Perpetrators (10-19) - Perpetrators Sex
+
+```{r exploratory_teen_perp_sex, include = FALSE}
+
+## Perpetrators sex
+homicides_Perp_Sex_teen <-homicides_clean %>%
+  group_by(Perpetrator_Age_Group, Perpetrator_Sex, Victim_Age_Group, Weapon) %>%
+  filter(Perpetrator_Age_Group == "10-19") %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count)) %>%
+  head(8)
+
+```
+
+```{r exploratory_teen_perp_sex_show, echo = FALSE}
+
+## Table - Perpetrators sex
+knitr::kable(
+  homicides_Perp_Sex_teen, 
+  caption = "Sex of Pre-Teen / Teen Perpetrators",
+  )
+
+```
+
+**Observations of Perpetrators Sex**
+
+1. Males killed more people between the ages of "20-29" using a firearm (16652).
+2. Females killed more people between the ages of "10-19" using a firearm, followed by the ages "0-9" using a blunt object.
+
+# Modeling
+
+## Random Forest to Predict Perpetrator's Race
+
+A Random Forest model was created to predict a perpetrator's race based on state, month, perpetrator sex, perpetrator age, weapon, victim sex, victim age, victim race, and relationship. The hypothesis is that the perpetrator's race is very closely related to the victim's race.
+
+As a side note, the ntree = 100 is set for faster run time.
+
+```{r random_forest_perpetrator_race, include = FALSE}
+
+## Create indices.  Split homicides_clean dataset into 80% training data and 20% test data.
+homicides_indices <- sample(1:nrow(homicides_clean), 0.8 * nrow(homicides_clean))
+homicides_train <- homicides_clean %>% slice(homicides_indices)
+homicides_test <- homicides_clean %>% slice(-homicides_indices)
+
+## Fit random forest.
+homicides_forest <- randomForest(as.factor(Perpetrator_Race) ~
+                                   State +
+                                   Month +
+                                   Perpetrator_Sex +
+                                   Perpetrator_Age +
+                                   Weapon +
+                                   Victim_Sex +
+                                   Victim_Age +
+                                   Victim_Race +
+                                   Relationship,
+                                 data = homicides_train,
+                                 ntree = 100,
+                                 importance = TRUE,
+                                 do.trace = 10)
+
+
+homicides_forest
+
+## Identify the most important variables.
+imp_hf <- importance(homicides_forest, type = 1)
+tib_imp_hf <- imp_hf %>% as_tibble(rownames = "Variable") %>% arrange(desc(MeanDecreaseAccuracy))
+
+```
+
+```{r random_forest_important_variables_show, echo = FALSE}
+
+## Table
+knitr::kable(
+  tib_imp_hf, 
+  caption = "Important Variables",
+  )
+
+```
+
+**Observations of Random Forest Model - Important Variables**
+
+1. Victim_Race is the most important variable, followed by Relationship, Victim_Age, and Perpetrator_Age.
+2. The Least important variable is Month.
+3. Surprisingly, Victim_Sex is the second least important.
+
+```{r random_forest_perpetrator_race_actual_vs_pred, include = FALSE}
+
+## See actual Perpetrator_Race vs. predicted Perpetrator_Race.
+results_hf <- homicides_test %>%
+  add_predictions(homicides_forest, var = "pred_perp_race") %>%
+  select(Perpetrator_Race,
+         Victim_Race,
+         Relationship,
+         Victim_Age,
+         Perpetrator_Age,
+         Weapon,
+         State,
+         Perpetrator_Sex,
+         Victim_Sex,
+         Month,
+         pred_perp_race)
+results_hf %>% View()
+
+## Calculate error rate
+error_rate_results_hf <- results_hf %>% group_by(Perpetrator_Race) %>% 
+  summarize(Count = n(), Wrong = sum(Perpetrator_Race != pred_perp_race), Error_rate = Wrong / Count) %>%
+  mutate(Overall_error_rate = sum(Wrong)/sum(Count))
+
+## Create confusion matrix.
+pred_homicides_test <- homicides_test %>% add_predictions(homicides_forest, var = "pred_perp_race")
+cm_hf <- xtabs(~ Perpetrator_Race + pred_perp_race, data = pred_homicides_test)
+cm_hf
+
+```
+
+```{r random_forest_error_rate_confusion_matrix_show, echo = FALSE}
+
+## Table
+knitr::kable(
+  error_rate_results_hf, 
+  caption = "Error Details",
+  )
+
+## Table
+knitr::kable(
+  cm_hf, 
+  caption = "Confusion Matrix",
+  )
+
+```
+
+**Observations of Random Forest Model - Error Rate and Confusion Matrix**
+
+1. The Error Rate of the model is approximately 0.13.
+2. The model is most accurate when Perpetrator_Race = White or Black.
+3. The model is least accurate when Perpetrator_Race = Asian/Pacific_Islander, Native_American/Alaska_Native, or Unknown.
+
+## Linear Regression to Predict Victim's Age Based on Perpetrator's Age
+
+Initially, the relative age (Victim - Perp) is assessed to see if there a pattern. The California data is being used for this analysis.
+
+```{r explanatory_rel_age, include = FALSE}
+filtered_homicides_rel <- homicides_clean %>%
+  filter(State == "California" & Victim_Age > 9 & Perpetrator_Age > 9 & Victim_Age < 90 &
+           Perpetrator_Age < 90 & Weapon == 'Firearm') %>%
+  mutate(Relative_Age = Victim_Age - Perpetrator_Age)
+
+```
+
+
+```{r explanatory_boxplot_relative, echo = FALSE}
+
+ggplot(data = filtered_homicides_rel)  +
+  geom_boxplot(aes(x = Victim_Age, y = Relative_Age, fill = Perpetrator_Age_Group)) +
+  labs (title = 'Relative Age Graph for Firearm Incidents, CA')
+```
+
+As observed, up to the age of 40, the victim and perpetrator are very similar in age. The median of each of those groups is almost equal to 0. The older they get the higher the relative age gets; this means that older victims tend to be targeted by individuals younger than they are. One possible interpretation would be that as the pool of potential victims gets older it is difficult to be targeted by someone even older than them, which would lead to a positive relative age. Furthermore, the spread from the boxplot graph gets wider the further we move up the age range. The last age group is mostly outliers as data is sparse and does not follow the same pattern as the rest. 
+
+**Linear Model**
+
+To test the initial hypothesis, that Victim_Age and Perp_Age follow a linear trend, a linear regression model was vreated to predict the perpetrator age based on victim age and other variables for the state of California. Using the data from only one state allowed us to create clearer visuals. The sample used was from California because it had the most murder cases, so there was a lot of data to work with. However, in the plot of Perpetrator_Age by Victim_Age, there are many outliers, specifically for age groups of "9 and under" and "90 and over" between Victim and Perpetrator groups. For ages of 99, this also represents ages greater than 99. So when plotted, a strange pattern for that age is observed.  Thus, these age values were filtered out to get a better understanding of the linear relation between Victim_Age and Perpetrator_Age. "9 and under" was also filtered out because there were very few data points in that age group, which skewed the results.
+
+```{r linear_regression_cali_scatter_plot, include = FALSE}
+
+filtered_homicides <- homicides_clean %>%
+  filter(State == "California" & Victim_Age > 9 & Perpetrator_Age > 9 & Victim_Age < 90 &  Perpetrator_Age < 90)
+
+```
+
+```{r linear_regression_scatter_plot, echo = FALSE}
+
+ggplot(filtered_homicides, aes(x = Victim_Age, y = Perpetrator_Age)) +
+  geom_point(aes(color = Victim_Age_Group))
+
+```
+
+**Observations of Age Groups Data - Scatter Plot**
+
+1. The Scatter Plot shows the Perpetrator Age by Victim Age relationship for each Victim Age Group.
+2. The data looks scattered but you can see a small sign of linear relationship between the two variables. This relationship is not sufficiently clear because there are so many outliers within each Victim groups. To see a clearer linear trend would mean to remove the outliers.
+
+```{r linear_regression_box_plot, echo = FALSE}
+
+ggplot(filtered_homicides, aes(x = Victim_Age, y =  Perpetrator_Age, fill = Victim_Age_Group)) +
+  geom_boxplot()
+
+```
+
+**Observations of Age Groups Data - Box Plot**
+
+1. As Victim_Age increases, the median Perpetrator_Age increases. This suggest that Victim_Age is a great predictor variable for Perpetrator_Age, since there seems to be a linear regression. It is also observed how the older the Victim is, the wider the spread in Perpetrator_Age is. For example, the median Perpetrator_Age for Victim_Age_Group 20-29 is about 25 years old. This suggests that Perpetrators around 25 years old are more likely to commit a murder within their age range rather than outside it. However, for Victim_Age_Group 80-89, the median Perpetrator_Age is about 40. There is a wider spread of Perpetrator_Age, within this Victim_Age_Group.
+
+```{r lm_perpetrator_age, include = FALSE}
+
+homicides_indices <- sample(1:nrow(filtered_homicides), 0.8*nrow(filtered_homicides))
+homicides_train <- filtered_homicides %>% slice(homicides_indices)
+homicides_test  <- filtered_homicides %>% slice(-homicides_indices)
+
+filtered_homicides_lm <- lm(Perpetrator_Age ~ Victim_Age * 
+                              Victim_Race + 
+                              Victim_Sex + 
+                              Relationship + 
+                              Weapon + 
+                              0, data = homicides_train)
+
+summary(filtered_homicides_lm)
+## Shows the overall values mentioned above.
+
+predict(filtered_homicides_lm)
+## Gives us the predicted Victim_Age based on the linear model.
+
+homicides_pred <- homicides_train %>% as_tibble() %>%
+  mutate(pred_Page = predict(filtered_homicides_lm, newdata = homicides_train)) %>%
+  select(Victim_Age_Group, Victim_Age, Perpetrator_Age, pred_Page)
+## Adds the predicted ages to a tibble with the other selected columns.
+
+homicides_pred
+
+```
+
+```{r linear_regression_perpetrator_age, echo = FALSE}
+
+homicides_pred %>%
+  ggplot(aes(x = Victim_Age, y = Perpetrator_Age, color = Victim_Age_Group )) + 
+  geom_point() +
+  geom_smooth(method = "lm", formula = "y ~ x", se = FALSE, span = 50)
+
+```
+
+**Observations of Linear Regression Model**
+
+The initial predictor variable was Perpetrator_Age. Then other categorical predictor variables were added based on their p-value to increase the Adjusted R squared. Variables with a p-values greater than 0.05 were removed from the linear model because this meant there was greater probability that the variable will not be meaningful for this regression model. Since they did not improve the Adjusted R-squared, there was no need to keep those variables. In the end, the r-squared is about 0.89.
+
+Since the baseline was removed and the interaction in the linear model included, different slopes for each Victim_Age_Group were obtained. As Perpetrator_Age increases, Victim_Age increases as well. However, many of Victim_Age values outside of the slope of predicted values still exist. This is because Homicide is motivated by a large number of factors making the victim somewhat random, even taking relationship, ages, etc. into account.
+However, between each Perpetrator_Age_Group there is still a linear pattern between ages of Perpetrators and Victims.
+
+```{r linear_regression_residuals, echo = FALSE}
+
+plot(filtered_homicides_lm$residuals)
+
+```
+
+**Observations of Linear Regression Model Residuals**
+
+A good way to test the accuracy or fit of the model is to look at the residuals or the differences between the real values and the predicted values.  The idea here is that the sum of the residuals is approximately zero or close to it as possible. Ideally, when you plot the residuals, they should look random. 
+Otherwise, there might be a hidden pattern that the linear model is not considering.
+
+Looking at the residuals, the majority of it is close to zero. However, some reach 20 and 60 in both directions. Residuals that are 60 could be outliers as there are not many of them. Residuals that fall between 20 and 40 in both directions are concerning, since there are a few. This could indicate that there is a hidden pattern the model cannot capture well. This was expected based on what was previously stated: Victims can be random regardless of their relationship, age, race, etc.
+
+# Summary
+
+The analysis conducted, provides a lot of interesting facts and patterns about homicides in the United States. A positive observation is that since 1990 the murder rate has dropped sharply and significantly. As expected, most crimes are committed by adults and the most frequent age group for perpetrators is 20-29 and the most targeted Victim_Age_Group was 20-29. The 20-29 age group represents over a third of the dataset. Moreover, the 90&over do not seem to have a different preference compared to the general population in terms of weapon choice.
+
+Turning to the two models, the random forest offers a low error for the prediction of Perp_Race. The linear model, tries to predict the perpetrator age based on victim age and other variables for the state of California. The regression has a high explanatory power and shows that there is a clear linear trend in the data. The residuals graph also further strengthens the model by not exhibiting any patterns.
+
+# Conclusion
+
+Using different analysis methods many different patterns and insights about the homicides in the United States were extracted and observed. The hypothesis was that perpetrators are usually the same race and similar age to that of the victim. Given the analysis conducted, the conclusion is that in an unsolved murder, the perpetrator is likely to be male, of the same race, and similar age group to the victim.
+
